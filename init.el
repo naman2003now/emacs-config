@@ -9,7 +9,7 @@
 (defvar efs/frame-transparency '(90 . 90))
 
 ;; The default is 800 kilobytes.  Measured in bytes.
-;; (setq gc-cons-threshold (* 50 1000 1000))
+(setq gc-cons-threshold (* 50 1000 1000))
 
 (defun efs/display-startup-time ()
   (message "Emacs loaded in %s with %d garbage collections."
@@ -17,6 +17,7 @@
                    (float-time
                      (time-subtract after-init-time before-init-time)))
            gcs-done))
+
 (add-hook 'emacs-startup-hook #'efs/display-startup-time)
 
 ;; Initialize package sources
@@ -37,6 +38,26 @@
 (require 'use-package)
 (setq use-package-always-ensure t)
 
+(use-package auto-package-update
+  :custom
+  (auto-package-update-interval 7)
+  (auto-package-update-prompt-before-update t)
+  (auto-package-update-hide-results t)
+  :config
+  (auto-package-update-maybe)
+  (auto-package-update-at-time "09:00"))
+
+;; NOTE: If you want to move everything out of the ~/.emacs.d folder
+;; reliably, set `user-emacs-directory` before loading no-littering!
+;(setq user-emacs-directory "~/.cache/emacs")
+
+(use-package no-littering)
+
+;; no-littering doesn't set this by default so we must place
+;; auto save files in the same path as it uses for sessions
+(setq auto-save-file-name-transforms
+      `((".*" ,(no-littering-expand-var-file-name "auto-save/") t)))
+
 (setq inhibit-startup-message t)
 
 (scroll-bar-mode -1)        ; Disable visible scrollbar
@@ -47,7 +68,7 @@
 (menu-bar-mode -1)            ; Disable the menu bar
 
 ;; Set up the visible bell
-(setq visible-bell nil)
+(setq visible-bell t)
 
 (column-number-mode)
 (global-display-line-numbers-mode t)
@@ -67,10 +88,12 @@
   (add-hook mode (lambda () (display-line-numbers-mode 0))))
 
 (set-face-attribute 'default nil :font "Cascadia Code" :height efs/default-font-size)
+
 ;; Set the fixed pitch face
 (set-face-attribute 'fixed-pitch nil :font "Cascadia Code" :height efs/default-font-size)
+
 ;; Set the variable pitch face
-(set-face-attribute 'variable-pitch nil :font "Cascadia Code" :height efs/default-variable-font-size :weight 'regular)
+(set-face-attribute 'variable-pitch nil :font "Cascadia Mono" :height efs/default-variable-font-size :weight 'regular)
 
 ;; Make ESC quit prompts
 (global-set-key (kbd "<escape>") 'keyboard-escape-quit)
@@ -97,7 +120,6 @@
   :config
   (evil-mode 1)
   (define-key evil-insert-state-map (kbd "C-g") 'evil-normal-state)
-  (define-key evil-insert-state-map (kbd "C-h") 'evil-delete-backward-char-and-join)
 
   ;; Use visual line motions even outside of visual-line-mode buffers
   (evil-global-set-key 'motion "j" 'evil-next-visual-line)
@@ -106,10 +128,10 @@
   (evil-set-initial-state 'messages-buffer-mode 'normal)
   (evil-set-initial-state 'dashboard-mode 'normal))
 
- (use-package evil-collection
-   :after evil
-   :config
-   (evil-collection-init))
+(use-package evil-collection
+  :after evil
+  :config
+  (evil-collection-init))
 
 (use-package doom-themes
   :init (load-theme 'doom-palenight t))
@@ -179,6 +201,18 @@
   ([remap describe-variable] . counsel-describe-variable)
   ([remap describe-key] . helpful-key))
 
+(use-package hydra
+  :defer t)
+
+(defhydra hydra-text-scale (:timeout 4)
+  "scale text"
+  ("j" text-scale-increase "in")
+  ("k" text-scale-decrease "out")
+  ("f" nil "finished" :exit t))
+
+(efs/leader-keys
+  "ts" '(hydra-text-scale/body :which-key "scale text"))
+
 (defun efs/org-font-setup ()
   ;; Replace list hyphen with dot
   (font-lock-add-keywords 'org-mode
@@ -194,7 +228,7 @@
                   (org-level-6 . 1.1)
                   (org-level-7 . 1.1)
                   (org-level-8 . 1.1)))
-    (set-face-attribute (car face) nil :font "Cascadia Code" :weight 'regular :height (cdr face)))
+    (set-face-attribute (car face) nil :font "Cascadia Mono" :weight 'regular :height (cdr face)))
 
   ;; Ensure that anything that should be fixed-pitch in Org files appears that way
   (set-face-attribute 'org-block nil    :foreground nil :inherit 'fixed-pitch)
@@ -377,10 +411,133 @@
 
 (add-hook 'org-mode-hook (lambda () (add-hook 'after-save-hook #'efs/org-babel-tangle-config)))
 
+(defun efs/lsp-mode-setup ()
+  (setq lsp-headerline-breadcrumb-segments '(path-up-to-project file symbols))
+  (lsp-headerline-breadcrumb-mode))
+
+(use-package lsp-mode
+  :commands (lsp lsp-deferred)
+  :hook (lsp-mode . efs/lsp-mode-setup)
+  :init
+  (setq lsp-keymap-prefix "s-l")  ;; Or 'C-l', 's-l'
+  :config
+  (lsp-enable-which-key-integration t))
+
+(use-package lsp-ui
+  :hook (lsp-mode . lsp-ui-mode)
+  :custom
+  (lsp-ui-doc-position 'bottom))
+
+(use-package lsp-treemacs
+  :after lsp)
+
+(use-package lsp-ivy
+  :after lsp)
+
+(use-package dap-mode
+  ;; Uncomment the config below if you want all UI panes to be hidden by default!
+  ;; :custom
+  ;; (lsp-enable-dap-auto-configure nil)
+  ;; :config
+  ;; (dap-ui-mode 1)
+  :commands dap-debug
+  :config
+  ;; Set up Node debugging
+  (require 'dap-node)
+  (dap-node-setup) ;; Automatically installs Node debug adapter if needed
+
+  ;; Bind `C-c l d` to `dap-hydra` for easy access
+  (general-define-key
+    :keymaps 'lsp-mode-map
+    :prefix lsp-keymap-prefix
+    "d" '(dap-hydra t :wk "debugger")))
+
+(setq web-mode-markup-indent-offset 2)
+(setq web-mode-code-indent-offset 2)
+(setq web-mode-css-indent-offset 2)
+(use-package web-mode
+  :ensure t
+  :mode (("\\.js\\'" . web-mode)
+	 ("\\.jsx\\'" .  web-mode)
+	 ("\\.ts\\'" . web-mode)
+	 ("\\.tsx\\'" . web-mode)
+	 ("\\.html\\'" . web-mode))
+  :commands web-mode)
+
+(use-package prettier-js
+  :ensure t)
+(add-hook 'web-mode-hook #'(lambda ()
+                             (enable-minor-mode
+                              '("\\.jsx?\\'" . prettier-js-mode))
+                            (enable-minor-mode
+                              '("\\.tsx?\\'" . prettier-js-mode))))
+
+(use-package python-mode
+  :ensure t
+  :hook (python-mode . lsp-deferred)
+  :custom
+  ;; NOTE: Set these if Python 3 is called "python3" on your system!
+  ;; (python-shell-interpreter "python3")
+  ;; (dap-python-executable "python3")
+  (dap-python-debugger 'debugpy)
+  :config
+  (require 'dap-python))
+
+(use-package pyvenv
+  :after python-mode
+  :config
+  (pyvenv-mode 1))
+
+(use-package company
+  :after lsp-mode
+  :hook (lsp-mode . company-mode) :bind (:map company-active-map
+         ("<tab>" . company-complete-selection))
+        (:map lsp-mode-map
+         ("<tab>" . company-indent-or-complete-common))
+  :custom
+  (company-minimum-prefix-length 1)
+  (company-idle-delay 0.0))
+
+(use-package company-box
+  :hook (company-mode . company-box-mode))
+
+(use-package projectile
+  :diminish projectile-mode
+  :config (projectile-mode)
+  :custom ((projectile-completion-system 'ivy))
+  :bind-keymap
+  ("C-c p" . projectile-command-map)
+  :init
+  ;; NOTE: Set this to the folder where you keep your Git repos!
+  (when (file-directory-p "~/Projects/Code")
+    (setq projectile-project-search-path '("~/Projects/Code")))
+  (setq projectile-switch-project-action #'projectile-dired))
+
+(use-package counsel-projectile
+  :after projectile
+  :config (counsel-projectile-mode))
+
+(use-package magit
+  :commands magit-status
+  :custom
+  (magit-display-buffer-function #'magit-display-buffer-same-window-except-diff-v1))
+
+;; NOTE: Make sure to configure a GitHub token before using this package!
+;; - https://magit.vc/manual/forge/Token-Creation.html#Token-Creation
+;; - https://magit.vc/manual/ghub/Getting-Started.html#Getting-Started
+(use-package forge
+  :after magit)
+
+(use-package evil-nerd-commenter
+  :bind ("M-/" . evilnc-comment-or-uncomment-lines))
+
+(use-package rainbow-delimiters
+  :hook (prog-mode . rainbow-delimiters-mode))
+
 (use-package term
   :commands term
   :config
-  (setq explicit-shell-file-name "fish") ;; Change this to zsh, etc
+  (setq explicit-shell-file-name "bash") ;; Change this to zsh, etc
   ;;(setq explicit-zsh-args '())         ;; Use 'explicit-<shell>-args for shell-specific args
 
   ;; Match the default Bash shell prompt.  Update this if you have a custom prompt
@@ -462,3 +619,16 @@
 
 ;; Make gc pauses faster by decreasing the threshold.
 (setq gc-cons-threshold (* 2 1000 1000))
+(custom-set-variables
+ ;; custom-set-variables was added by Custom.
+ ;; If you edit it by hand, you could mess it up, so be careful.
+ ;; Your init file should contain only one such instance.
+ ;; If there is more than one, they won't work right.
+ '(package-selected-packages
+   '(prettier-js web-mode which-key vterm visual-fill-column use-package typescript-mode rainbow-delimiters pyvenv python-mode org-bullets no-littering lsp-ui lsp-ivy js3-mode ivy-rich ivy-prescient helpful general forge evil-nerd-commenter evil-collection eterm-256color eshell-git-prompt doom-themes doom-modeline dired-single dired-open dired-hide-dotfiles dap-mode counsel-projectile company-box cmake-mode auto-package-update all-the-icons-dired)))
+(custom-set-faces
+ ;; custom-set-faces was added by Custom.
+ ;; If you edit it by hand, you could mess it up, so be careful.
+ ;; Your init file should contain only one such instance.
+ ;; If there is more than one, they won't work right.
+ )
